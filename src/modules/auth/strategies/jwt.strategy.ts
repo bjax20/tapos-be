@@ -22,7 +22,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, "jwt") {
                 (request: FastifyRequest) => request?.cookies?.auth_token || null, // Fastify populates cookies here after you register @fastify/cookie
             ]),
             ignoreExpiration: false,
-            secretOrKey: configService.get<string>("JWT_SECRET", "test_secret"),
+            secretOrKey: configService.get<string>("JWT_SECRET", "test_secret"), // use env
         });
     }
 
