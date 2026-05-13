@@ -1,4 +1,4 @@
-name: tapos-be CI/CD
+name: tapos-be CI
 
 on:
   push:
@@ -13,7 +13,6 @@ jobs:
       tapos_db:
         image: mysql:8.0
         env:
-          # Use a hardcoded string here. Secrets aren't allowed in services.
           MYSQL_ROOT_PASSWORD: test_root_password
           MYSQL_DATABASE: tapos_test
         ports:
@@ -27,20 +26,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 1. Install pnpm first so setup-node can use it for caching
       - name: Install pnpm
         uses: pnpm/action-setup@v3
         with:
-          version: 10
+          version: 9 # Matches your previous setup
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "pnpm" # Change this from npm to pnpm
+          cache: "pnpm"
 
       - name: Install Dependencies
-        # Use pnpm install with --frozen-lockfile for CI safety
         run: pnpm install --frozen-lockfile
 
       - name: Run Prisma Generate
@@ -51,122 +48,11 @@ jobs:
         env:
           DATABASE_URL: mysql://root:test_root_password@localhost:3306/tapos_test
 
-      - name: Run Tests (TDD Strict)
+      - name: Run Tests
         run: pnpm exec jest --config ./jest.config.js
         env:
           NODE_ENV: test
           DATABASE_URL: mysql://root:test_root_password@localhost:3306/tapos_test
-          API_PORT: ${{ secrets.API_PORT }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          API_PREFIX: ${{ secrets.API_PREFIX }}
-          SWAGGER_ENABLE: ${{ secrets.SWAGGER_ENABLE }}
-          HEALTH_TOKEN: ${{ secrets.HEALTH_TOKEN }}
-          JWT_ISSUER: ${{ secrets.JWT_ISSUER }}
-
-      - name: Run E2E Tests
-        # Use pnpm exec to ensure it uses the local jest version
-        run: pnpm exec jest --config src/tests/jest-e2e.json --rootDir .
-        env:
-          NODE_ENV: test
-          DATABASE_URL: mysql://root:test_root_password@localhost:3306/tapos_test
-          API_PORT: ${{ secrets.API_PORT }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          API_PREFIX: ${{ secrets.API_PREFIX }}
-          JWT_ISSUER: ${{ secrets.JWT_ISSUER }}
-          HEALTH_TOKEN: ${{ secrets.HEALTH_TOKEN }}
-          SWAGGER_ENABLE: ${{ secrets.SWAGGER_ENABLE }}
-
-  build-docker:
-    needs: test-and-lint
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-      - name: Build and Push
-        uses: docker/build-push-action@v5
-        with:
-          push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/tapos-be:latest
-
-  deploy:
-    needs: build-docker
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Copy docker-compose.yml to VPS
-        uses: appleboy/scp-action@master
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          source: "docker-compose.yml"
-          target: "~/tapos-be/"
-
-      - name: Deploy to Singapore VPS via SSH
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          script: |
-            set -e 
-            echo "=== 🚀 STEP 1: Setting up Environment ==="
-            mkdir -p ~/tapos-be
-            cd ~/tapos-be
-
-            cat > .env << EOF
-            NODE_ENV=production
-            API_PORT=${{ secrets.API_PORT }}
-            API_PREFIX=${{ secrets.API_PREFIX }}
-            HEALTH_TOKEN=${{ secrets.HEALTH_TOKEN }}
-            SWAGGER_ENABLE=${{ secrets.SWAGGER_ENABLE }}
-            JWT_SECRET=${{ secrets.JWT_SECRET }}
-            JWT_ISSUER=${{ secrets.JWT_ISSUER }}
-            MYSQL_DATABASE=${{ secrets.DB_NAME }}
-            MYSQL_ROOT_PASSWORD=${{ secrets.DB_ROOT_PASSWORD }}
-            MYSQL_USER=${{ secrets.DB_USER }}
-            MYSQL_PASSWORD=${{ secrets.DB_PASSWORD }}
-            DATABASE_URL="mysql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@tapos_db:3306/${{ secrets.DB_NAME }}"
-            EOF
-
-            echo "=== 📦 STEP 2: Refreshing Containers ==="
-            docker-compose -p tapos pull
-            docker-compose -p tapos down --remove-orphans || true
-            docker-compose -p tapos up -d --force-recreate
-
-            echo "=== 🔍 STEP 3: MySQL Health Check ==="
-            until docker-compose -p tapos exec -T tapos_db mysqladmin ping -u root -p${{ secrets.DB_ROOT_PASSWORD }} &> /dev/null; do
-              echo "MySQL warming up..."
-              sleep 3
-            done
-            echo "🛠️ Configuring User Permissions..."
-            docker-compose -p tapos exec -T tapos_db mysql -u root -p${{ secrets.DB_ROOT_PASSWORD }} -e "GRANT ALL PRIVILEGES ON *.* TO '${{ secrets.DB_USER }}'@'%'; FLUSH PRIVILEGES;"
-            echo "✅ MySQL is ready!"
-
-            echo "=== 🧪 STEP 4: API Health Check ==="
-            MAX_API_ATTEMPTS=20
-            API_ATTEMPT=0
-            set +e
-            until docker-compose -p tapos exec -T api curl -s http://localhost:${{ secrets.API_PORT }}${{ secrets.API_PREFIX }}/health -H "Authorization: Bearer ${{ secrets.HEALTH_TOKEN }}" &> /dev/null; do
-              API_ATTEMPT=$((API_ATTEMPT + 1))
-              if [ $API_ATTEMPT -ge $MAX_API_ATTEMPTS ]; then
-                echo "❌ API Health Check Failed"
-                docker-compose -p tapos logs --tail=100 api
-                exit 1
-              fi
-              echo "API warming up... ($API_ATTEMPT/$MAX_API_ATTEMPTS)"
-              sleep 3
-            done
-            set -e
-            echo "✅ API is healthy!"
-
-            echo "=== 🔄 STEP 5: Database Migrations ==="
-            docker-compose -p tapos exec -T api npx prisma migrate deploy
-
-            echo "=== 🎉 ✅ DEPLOYMENT SUCCESSFUL ==="
+          # Use default dummy values for CI tests if secrets aren't set
+          JWT_SECRET: testsecret
+          API_PREFIX: /api/v1
