@@ -39,6 +39,8 @@ RUN apk add --no-cache openssl curl
 
 WORKDIR /usr/src/app
 
+RUN npm install -g pnpm
+
 # 8. Copy production node_modules (this now contains the generated Prisma client)
 COPY --from=builder /usr/src/app/node_modules ./node_modules
 
